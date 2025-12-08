@@ -29,6 +29,7 @@
 #include "updatechecker.h"
 #include "updatedownloader.h"
 #include "appcontroller.h"
+#include <iostream>
 
 #define wxNO_NET_LIB
 #define wxNO_XML_LIB
@@ -432,6 +433,8 @@ public:
     // change state into "update downloaded"
     void StateUpdateDownloaded(const std::wstring& updateFile, const std::string &installerArguments);
 
+    void OnRunInstaller(wxCommandEvent&);
+
 private:
     void EnablePulsing(bool enable);
     void OnTimer(wxTimerEvent& event);
@@ -442,7 +445,6 @@ private:
     void OnRemindLater(wxCommandEvent&);
     void OnInstall(wxCommandEvent&);
 
-    void OnRunInstaller(wxCommandEvent&);
 
     bool RunInstaller();
 
@@ -669,6 +671,9 @@ void UpdateDialog::OnInstall(wxCommandEvent&)
 
 void UpdateDialog::OnRunInstaller(wxCommandEvent&)
 {
+
+    if (m_updateFile.IsEmpty()) { return; }
+
     if( !ApplicationController::IsReadyToShutdown() )
     {
         wxMessageDialog dlg(this,
@@ -989,30 +994,8 @@ void UpdateDialog::StateUpdateDownloaded(const std::wstring& updateFile, const s
     m_updateFile = updateFile;
     m_installerArguments = installerArguments;
 
-    if ( m_installAutomatically )
-    {
-        wxCommandEvent nullEvent;
-        OnRunInstaller(nullEvent);
-        return;
-    }
-
-    LayoutChangesGuard guard(this);
-
-    SetMessage(_("Ready to install."));
-
-    m_progress->SetRange(1);
-    m_progress->SetValue(1);
-
-    m_runInstallerButton->SetDefault();
-
-    HIDE(m_heading);
-    SHOW(m_progress);
-    HIDE(m_progressLabel);
-    HIDE(m_closeButtonSizer);
-    SHOW(m_runInstallerButtonSizer);
-    HIDE(m_releaseNotesSizer);
-    HIDE(m_updateButtonsSizer);
-    MakeResizable(false);
+    std::string fullVersion = m_appcast.ShortVersionString + "-" + m_appcast.Version;
+    ApplicationController::NotifyUpdateDownloaded(fullVersion);
 }
 
 
@@ -1143,6 +1126,8 @@ const int MSG_UPDATE_DOWNLOADED = wxNewId();
 // Tell the UI to ask for permission to check updates
 const int MSG_ASK_FOR_PERMISSION = wxNewId();
 
+const int MSG_INSTALL_UPDATE_SILENTLY = wxNewId();
+
 
 /*--------------------------------------------------------------------------*
                                 Application
@@ -1172,6 +1157,7 @@ private:
     void OnDownloadProgress(wxThreadEvent& event);
     void OnUpdateDownloaded(wxThreadEvent& event);
     void OnAskForPermission(wxThreadEvent& event);
+    void OnInstallUpdateSilently(wxThreadEvent& event);
 
 private:
     UpdateDialog *m_win;
@@ -1207,6 +1193,7 @@ App::App()
     Bind(wxEVT_COMMAND_THREAD, &App::OnDownloadProgress, this, MSG_DOWNLOAD_PROGRESS);
     Bind(wxEVT_COMMAND_THREAD, &App::OnUpdateDownloaded, this, MSG_UPDATE_DOWNLOADED);
     Bind(wxEVT_COMMAND_THREAD, &App::OnAskForPermission, this, MSG_ASK_FOR_PERMISSION);
+    Bind(wxEVT_COMMAND_THREAD, &App::OnInstallUpdateSilently, this, MSG_INSTALL_UPDATE_SILENTLY);
 }
 
 
@@ -1280,7 +1267,7 @@ void App::ShowWindow()
     m_win->Freeze();
     if (!m_win->IsShown())
         CenterWindowOnHostApplication(m_win);
-    m_win->Show();
+    m_win->Show(false);
     m_win->Thaw();
     m_win->Raise();
 }
@@ -1373,6 +1360,15 @@ void App::OnAskForPermission(wxThreadEvent& event)
         // same as in win_sparkle_init()
         UpdateChecker *check = new PeriodicUpdateChecker();
         check->Start();
+    }
+}
+
+void App::OnInstallUpdateSilently(wxThreadEvent& event)
+{
+    if ( m_win )
+    {
+        wxCommandEvent nullEvent;
+        m_win->OnRunInstaller(nullEvent);
     }
 }
 
@@ -1505,7 +1501,9 @@ void UI::NotifyNoUpdates(bool installAutomatically)
 /*static*/
 void UI::NotifyUpdateAvailable(const Appcast& info, bool installAutomatically)
 {
-    ApplicationController::NotifyUpdateFound();
+    //version>-<build_number>, e.g: 6.20.0-12345
+    std::string fullVersion = info.ShortVersionString + "-" + info.Version;
+    ApplicationController::NotifyUpdateFound(fullVersion);
 
     UIThreadAccess uit;
     EventPayload payload;
@@ -1566,6 +1564,15 @@ void UI::AskForPermission()
 {
     UIThreadAccess uit;
     uit.App().SendMsg(MSG_ASK_FOR_PERMISSION);
+}
+
+void UI::OnInstallUpdateSilently() {
+    UIThreadAccess uit;
+
+    if ( !uit.IsRunning() )
+        return;
+
+    uit.App().SendMsg(MSG_INSTALL_UPDATE_SILENTLY);
 }
 
 } // namespace winsparkle
